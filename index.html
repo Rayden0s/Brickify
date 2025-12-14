@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>BrickPlayer - Web</title>
+<style>
+  body { background: #111; color: white; font-family: Arial, sans-serif; margin: 0; display: flex; height: 100vh; }
+  #left { background: #222; width: 300px; padding: 10px; display: flex; flex-direction: column; }
+  #left h2 { margin: 5px 0; }
+  #playlists, #songs, #queue { flex: 1; background: #333; margin-bottom: 10px; overflow-y: auto; }
+  #playlists li, #songs li, #queue li { padding: 5px; cursor: pointer; }
+  #playlists li:hover, #songs li:hover, #queue li:hover { background: #555; }
+  #right { flex: 1; padding: 10px; display: flex; flex-direction: column; align-items: center; }
+  #album { width: 200px; height: 200px; background: #444; margin-bottom: 10px; }
+  #nowPlaying { margin-bottom: 5px; }
+  #controls { margin-top: 10px; }
+  button { margin: 2px; background: #333; color: white; border: none; padding: 5px 10px; cursor: pointer; }
+  button:hover { background: #1DB954; }
+  input[type="range"] { width: 300px; }
+  #addFiles { margin-bottom: 5px; }
+</style>
+</head>
+<body>
+
+<div id="left">
+  <h2>Playlists</h2>
+  <button id="addFiles">Add Files</button>
+  <ul id="playlists"></ul>
+
+  <h2>Songs</h2>
+  <ul id="songs"></ul>
+
+  <h2>Queue</h2>
+  <ul id="queue"></ul>
+</div>
+
+<div id="right">
+  <div id="album"></div>
+  <div id="nowPlaying">Now Playing: None</div>
+  <div>
+    <span id="currentTime">0:00</span> / <span id="duration">0:00</span>
+  </div>
+  <input type="range" id="progress" value="0" min="0" max="100">
+
+  <div id="controls">
+    <button id="prev">⏮</button>
+    <button id="playPause">▶</button>
+    <button id="next">⏭</button>
+    <button id="shuffle">🔀</button>
+    <button id="repeat">🔁</button>
+  </div>
+</div>
+
+<input type="file" id="fileInput" multiple style="display:none">
+
+<script>
+let playlists = {}; // { playlistName: [file objects] }
+let currentPlaylist = null;
+let songs = [];
+let queue = [];
+let currentIndex = -1;
+let shuffle = false;
+let repeatMode = 'off'; // off, playlist, song
+
+const audio = new Audio();
+audio.volume = 0.6;
+
+const playlistsEl = document.getElementById('playlists');
+const songsEl = document.getElementById('songs');
+const queueEl = document.getElementById('queue');
+const nowPlayingEl = document.getElementById('nowPlaying');
+const albumEl = document.getElementById('album');
+const currentTimeEl = document.getElementById('currentTime');
+const durationEl = document.getElementById('duration');
+const progressEl = document.getElementById('progress');
+
+function formatTime(s) {
+  let m = Math.floor(s / 60);
+  let sec = Math.floor(s % 60);
+  return `${m}:${sec.toString().padStart(2,'0')}`;
+}
+
+// Add files
+document.getElementById('addFiles').onclick = () => {
+  document.getElementById('fileInput').click();
+};
+
+document.getElementById('fileInput').onchange = (e) => {
+  const files = Array.from(e.target.files);
+  playlists['Default'] = (playlists['Default'] || []).concat(files);
+  renderPlaylists();
+  if (!currentPlaylist) selectPlaylist('Default');
+};
+
+// Render playlists
+function renderPlaylists() {
+  playlistsEl.innerHTML = '';
+  for (let name in playlists) {
+    let li = document.createElement('li');
+    li.textContent = name;
+    li.onclick = () => selectPlaylist(name);
+    playlistsEl.appendChild(li);
+  }
+}
+
+// Select playlist
+function selectPlaylist(name) {
+  currentPlaylist = name;
+  songs = playlists[name];
+  renderSongs();
+}
+
+// Render songs
+function renderSongs() {
+  songsEl.innerHTML = '';
+  songs.forEach((file, i) => {
+    let li = document.createElement('li');
+    li.textContent = file.name;
+    li.onclick = () => playSong(i);
+    let addBtn = document.createElement('button');
+    addBtn.textContent = '=';
+    addBtn.onclick = (e) => { e.stopPropagation(); addToQueue(i); };
+    li.appendChild(addBtn);
+    songsEl.appendChild(li);
+  });
+}
+
+// Render queue
+function renderQueue() {
+  queueEl.innerHTML = '';
+  queue.forEach((file, i) => {
+    let li = document.createElement('li');
+    li.textContent = file.name;
+    queueEl.appendChild(li);
+  });
+}
+
+// Play song
+function playSong(idx) {
+  if (queue.length) {
+    currentIndex = -1; // playing queue first
+    return playNext();
+  }
+  currentIndex = idx;
+  audio.src = URL.createObjectURL(songs[idx]);
+  audio.play();
+  nowPlayingEl.textContent = 'Now Playing: ' + songs[idx].name;
+  updateAlbum();
+}
+
+// Add to queue
+function addToQueue(idx) {
+  queue.push(songs[idx]);
+  renderQueue();
+}
+
+// Next
+function playNext() {
+  if (queue.length) {
+    audio.src = URL.createObjectURL(queue.shift());
+    audio.play();
+    renderQueue();
+    nowPlayingEl.textContent = 'Now Playing: ' + audio.src.split('/').pop();
+  } else {
+    if (!songs.length) return;
+    if (shuffle) currentIndex = Math.floor(Math.random() * songs.length);
+    else currentIndex++;
+    if (currentIndex >= songs.length) {
+      if (repeatMode === 'playlist') currentIndex = 0;
+      else return;
+    }
+    audio.src = URL.createObjectURL(songs[currentIndex]);
+    audio.play();
+    nowPlayingEl.textContent = 'Now Playing: ' + songs[currentIndex].name;
+  }
+  updateAlbum();
+}
+
+// Previous
+document.getElementById('prev').onclick = () => {
+  if (!songs.length) return;
+  currentIndex--;
+  if (currentIndex < 0) currentIndex = 0;
+  playSong(currentIndex);
+};
+
+// Play/pause
+document.getElementById('playPause').onclick = () => {
+  if (audio.paused) audio.play();
+  else audio.pause();
+};
+
+// Next button
+document.getElementById('next').onclick = () => playNext();
+
+// Shuffle
+document.getElementById('shuffle').onclick = () => shuffle = !shuffle;
+
+// Repeat
+document.getElementById('repeat').onclick = () => {
+  if (repeatMode === 'off') repeatMode = 'playlist';
+  else if (repeatMode === 'playlist') repeatMode = 'song';
+  else repeatMode = 'off';
+};
+
+// Progress bar
+progressEl.oninput = () => {
+  audio.currentTime = (progressEl.value / 100) * audio.duration;
+};
+
+audio.ontimeupdate = () => {
+  if (!audio.duration) return;
+  progressEl.value = (audio.currentTime / audio.duration) * 100;
+  currentTimeEl.textContent = formatTime(audio.currentTime);
+  durationEl.textContent = formatTime(audio.duration);
+};
+
+// Update album
+function updateAlbum() {
+  albumEl.style.background = '#444'; // placeholder
+}
+</script>
+
+</body>
+</html>
