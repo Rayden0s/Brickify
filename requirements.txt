@@ -1,7 +1,0 @@
-pygame
-pillow
-pydub
-#local ----------------^
-any music you add must be in a folder it was made this way
-
-the current music folder does not have mp3 files your crazy they dont work caause github
