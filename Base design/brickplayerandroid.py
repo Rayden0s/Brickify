@@ -1,157 +1,118 @@
-from kivy.app import App
-from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.button import Button
-from kivy.uix.label import Label
-from kivy.uix.image import Image
-from kivy.uix.slider import Slider
-from kivy.uix.dropdown import DropDown
-from kivy.core.audio import SoundLoader
-from kivy.clock import Clock
-from kivy.graphics import Color, Rectangle
+# main.py
 import os
+import json
+import webbrowser
+from kivy.core.audio import SoundLoader
+from kivy.properties import StringProperty, ListProperty
+from kivy.uix.boxlayout import BoxLayout
+from kivymd.app import MDApp
+from kivymd.uix.list import OneLineListItem
 
-MUSIC_FOLDER = "music"
-SPOTIFY_GREEN = (0.11, 0.73, 0.33, 1)
-BACKGROUND = (0.07, 0.07, 0.07, 1)
-PANEL_BG = (0.13, 0.13, 0.13, 1)
-BUTTON_BG = (0.2, 0.2, 0.2, 1)
-ALBUM_SIZE = 300
+# Path to save playlists
+PLAYLIST_FILE = "playlists.json"
 
-class BG(BoxLayout):
-    def __init__(self, color, **kwargs):
-        super().__init__(**kwargs)
-        with self.canvas.before:
-            Color(*color)
-            self.rect = Rectangle(size=self.size, pos=self.pos)
-        self.bind(size=self._update, pos=self._update)
+class MusicPlayer(BoxLayout):
+    now_playing_text = StringProperty("No song playing")
+    playlists = ListProperty([])
 
-    def _update(self, *args):
-        self.rect.size = self.size
-        self.rect.pos = self.pos
-
-class PlayerUI(BG):
     def __init__(self, **kwargs):
-        super().__init__(BACKGROUND, orientation="vertical", **kwargs)
-
-        self.queue = []
-        self.playlist = []
-        self.index = 0
+        super().__init__(**kwargs)
         self.sound = None
+        self.load_playlists()
 
-        self.ensure_music()
+    def load_playlists(self):
+        if os.path.exists(PLAYLIST_FILE):
+            with open(PLAYLIST_FILE, "r") as f:
+                self.playlists = json.load(f)
+        else:
+            self.playlists = []
 
-        # TOP BAR
-        top = BG(BACKGROUND, size_hint_y=None, height=50)
-        self.add_widget(top)
+        self.update_playlist_list()
 
-        playlists_btn = Button(text="Playlists", background_color=BUTTON_BG)
-        playlists_btn.bind(on_release=self.open_playlists)
-        top.add_widget(playlists_btn)
+    def save_playlists(self):
+        with open(PLAYLIST_FILE, "w") as f:
+            json.dump(self.playlists, f)
 
-        queue_btn = Button(text="Queue", background_color=BUTTON_BG)
-        queue_btn.bind(on_release=self.open_queue)
-        top.add_widget(queue_btn)
+    def update_playlist_list(self):
+        self.ids.playlist_list.clear_widgets()
+        for folder in self.playlists:
+            item = OneLineListItem(
+                text=folder,
+                on_release=lambda x, folder=folder: self.open_playlist(folder)
+            )
+            item.bind(on_touch_down=self.check_double_tap)
+            self.ids.playlist_list.add_widget(item)
 
-        # ALBUM ART
-        self.cover = Image(size_hint_y=None, height=ALBUM_SIZE)
-        self.add_widget(self.cover)
+    def add_playlist(self):
+        # Simple example: ask user to input folder path
+        folder = input("Enter full folder path for playlist: ")
+        if os.path.exists(folder) and folder not in self.playlists:
+            self.playlists.append(folder)
+            self.save_playlists()
+            self.update_playlist_list()
 
-        self.now_playing = Label(text="Now Playing: None", size_hint_y=None, height=40)
-        self.add_widget(self.now_playing)
+    def open_playlist(self, folder):
+        if os.path.exists(folder):
+            webbrowser.open(folder)  # opens folder in file explorer
+        else:
+            print("Folder not found")
 
-        self.time_label = Label(text="0:00 / 0:00", size_hint_y=None, height=30)
-        self.add_widget(self.time_label)
+    def check_double_tap(self, instance, touch):
+        if touch.is_double_tap:
+            self.open_playlist(instance.text)
 
-        # BOTTOM CONTROLS
-        bottom = BG(PANEL_BG, size_hint_y=None, height=160)
-        self.add_widget(bottom)
-
-        controls = BoxLayout(size_hint_y=None, height=60)
-        bottom.add_widget(controls)
-
-        controls.add_widget(Button(text="⏮", on_press=self.prev))
-        controls.add_widget(Button(text="▶", on_press=self.play))
-        controls.add_widget(Button(text="⏭", on_press=self.next))
-        controls.add_widget(Button(text="🔀"))
-        controls.add_widget(Button(text="🔁"))
-
-        self.volume = Slider(min=0, max=1, value=0.7)
-        self.volume.bind(value=self.set_volume)
-        bottom.add_widget(self.volume)
-
-        self.progress = Slider(min=0, max=1, value=0)
-        self.progress.bind(on_touch_up=self.seek)
-        bottom.add_widget(self.progress)
-
-        Clock.schedule_interval(self.update_progress, 0.2)
-
-    # ---------------- CORE ---------------- #
-
-    def ensure_music(self):
-        if not os.path.exists(MUSIC_FOLDER):
-            os.makedirs(MUSIC_FOLDER)
-        for f in os.listdir(MUSIC_FOLDER):
-            if f.endswith((".mp3", ".wav", ".ogg")):
-                self.playlist.append(os.path.join(MUSIC_FOLDER, f))
-
-    def play(self, *args):
-        if not self.playlist:
-            return
+    def play_song(self, path):
         if self.sound:
             self.sound.stop()
-
-        path = self.playlist[self.index]
         self.sound = SoundLoader.load(path)
         if self.sound:
-            self.sound.volume = self.volume.value
             self.sound.play()
-            self.now_playing.text = f"Now Playing: {os.path.basename(path)}"
+            self.now_playing_text = os.path.basename(path)
 
-    def next(self, *args):
-        self.index = (self.index + 1) % len(self.playlist)
-        self.play()
-
-    def prev(self, *args):
-        self.index = max(0, self.index - 1)
-        self.play()
-
-    def set_volume(self, instance, value):
+    def toggle_play(self):
         if self.sound:
-            self.sound.volume = value
+            if self.sound.state == "play":
+                self.sound.stop()
+            else:
+                self.sound.play()
 
-    def update_progress(self, dt):
-        if self.sound and self.sound.length:
-            self.progress.value = self.sound.get_pos() / self.sound.length
+KV = '''
+<MusicPlayer>:
+    orientation: 'vertical'
+    padding: 10
+    spacing: 10
 
-    def seek(self, instance, touch):
-        if self.sound and instance.collide_point(*touch.pos):
-            self.sound.stop()
-            self.sound.play()
-            self.sound.seek(instance.value * self.sound.length)
+    MDLabel:
+        id: now_playing
+        text: root.now_playing_text
+        halign: 'center'
+        theme_text_color: 'Custom'
+        text_color: 1,1,1,1
+        font_style: 'H6'
 
-    # ---------------- DROPDOWNS ---------------- #
+    ScrollView:
+        MDList:
+            id: playlist_list
 
-    def open_playlists(self, btn):
-        dd = DropDown()
-        for song in self.playlist:
-            b = Button(text=os.path.basename(song), size_hint_y=None, height=44)
-            b.bind(on_release=lambda x, p=song: self.select_song(p, dd))
-            dd.add_widget(b)
-        dd.open(btn)
+    BoxLayout:
+        size_hint_y: None
+        height: "50dp"
+        spacing: 10
 
-    def open_queue(self, btn):
-        dd = DropDown()
-        for song in self.queue:
-            dd.add_widget(Button(text=os.path.basename(song), size_hint_y=None, height=44))
-        dd.open(btn)
+        MDRaisedButton:
+            text: "Add Playlist"
+            on_release: root.add_playlist()
 
-    def select_song(self, path, dd):
-        dd.dismiss()
-        self.index = self.playlist.index(path)
-        self.play()
+        MDRaisedButton:
+            text: "Play/Pause"
+            on_release: root.toggle_play()
+'''
 
-class MusicApp(App):
+class MusicApp(MDApp):
     def build(self):
-        return PlayerUI()
+        from kivy.lang import Builder
+        Builder.load_string(KV)
+        return MusicPlayer()
 
-MusicApp().run()
+if __name__ == "__main__":
+    MusicApp().run()

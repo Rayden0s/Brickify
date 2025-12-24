@@ -1,11 +1,13 @@
 import os
 import shutil
 import tkinter as tk
-from tkinter import filedialog
+from tkinter import filedialog, ttk
 from PIL import Image, ImageTk
 import pygame
 import random
 import time
+import numpy as np
+import soundfile as sf
 
 # ---------------------------- CONFIG -------------------------------- #
 MUSIC_FOLDER = "music"
@@ -19,12 +21,12 @@ ALBUM_SIZE = 300  # px
 pygame.mixer.init()
 
 # ---------------------------- GLOBAL STATE --------------------------- #
-playlist_dict = {}  # name -> folder path
-playlist_paths = []  # currently loaded playlist paths
-playlist_names = []  # currently loaded playlist song names
-queue = []           # visible queue song names
-queue_paths = []     # visible queue paths
-invisible_queue_paths = []  # invisible queue (playlist) paths
+playlist_dict = {}
+playlist_paths = []
+playlist_names = []
+queue = []
+queue_paths = []
+invisible_queue_paths = []
 invisible_queue_index = 0
 current_index = 0
 current_song_length = 0.0
@@ -33,15 +35,28 @@ is_paused = False
 is_seeking = False
 seek_preview = 0.0
 shuffle_mode = False
-repeat_mode = "off"  # "off", "playlist", "song"
+repeat_mode = "off"
 album_image = None
 song_start_time = 0.0
 seeked_time = 0.0
-
 history_paths = []
 history_index = -1
 
-# ---------------------------- HELPERS --------------------------------#
+# Visualizer & Game
+visualizer_samples = np.array([])
+visualizer_sample_rate = 44100
+ripples = []
+
+game_blocks = []
+block_size = 40
+score = 0
+lives = 5
+game_over = False
+difficulty = "Medium"
+block_speed_dict = {"Easy": 2, "Medium": 4, "Hard": 6}
+spawn_interval_dict = {"Easy": 1500, "Medium": 1000, "Hard": 700}
+last_spawn_time = 0
+# ---------------------------- HELPERS -------------------------------- #
 def format_time(seconds):
     try:
         s = int(seconds)
@@ -96,21 +111,26 @@ def load_album_image(song_path):
     album_image = ImageTk.PhotoImage(img)
     album_label.config(image=album_image)
 
-# ---------------------------- PLAYER ACTIONS --------------------------#
+def random_color():
+    r = random.randint(100, 255)
+    g = random.randint(100, 255)
+    b = random.randint(100, 255)
+    return f'#{r:02x}{g:02x}{b:02x}'
+
+# ---------------------------- PLAYER ACTIONS -------------------------- #
 def play_song(path, playlist=None, index=None, use_invisible=True):
     global current_song_length, current_position, is_paused, song_start_time, seeked_time
     global invisible_queue_paths, invisible_queue_index, current_index, playlist_paths
     global history_paths, history_index, playlist_names
+    global visualizer_samples, visualizer_sample_rate
 
     if not path:
         return
 
-    # Reset positions BEFORE playback
     current_position = 0.0
     seeked_time = 0.0
     song_start_time = time.time()
 
-    # If selecting from a playlist, set invisible queue
     if playlist is not None and index is not None and use_invisible:
         invisible_queue_paths = playlist
         invisible_queue_index = index
@@ -125,9 +145,8 @@ def play_song(path, playlist=None, index=None, use_invisible=True):
         print("Playback error:", e)
         return
 
-    # Update history
     if history_index == -1 or (history_paths and path != history_paths[history_index]):
-        history_paths = history_paths[:history_index+1]  # remove forward history
+        history_paths = history_paths[:history_index+1]
         history_paths.append(path)
         history_index += 1
 
@@ -142,6 +161,17 @@ def play_song(path, playlist=None, index=None, use_invisible=True):
     now_playing_label.config(text=f"Now Playing: {os.path.basename(path)}")
     load_album_image(path)
 
+    # Preload visualizer
+    try:
+        data, samplerate = sf.read(path, dtype='float32')
+        if len(data.shape) > 1:
+            data = data[:,0]
+        visualizer_samples = data
+        visualizer_sample_rate = samplerate
+    except Exception as e:
+        visualizer_samples = np.array([])
+        visualizer_sample_rate = 44100
+        print("Visualizer load error:", e)
 
 def play_next_song():
     global invisible_queue_index
@@ -196,7 +226,7 @@ def toggle_repeat():
         repeat_button.config(bg=BUTTON_BG, text="🔁")
         repeat_label.config(text="")
 
-# ---------------------------- SEEK & PROGRESS ------------------------#
+# ---------------------------- SEEK & PROGRESS ------------------------ #
 def start_seek(event):
     global is_seeking
     is_seeking = True
@@ -241,27 +271,16 @@ def update_progress():
                 play_next_song()
     root.after(200, update_progress)
 
-# ---------------------------- QUEUE ----------------------------------#
+# ---------------------------- QUEUE & PLAYLIST ------------------------ #
 def refresh_queue_dropdown():
     queue_mb.menu.delete(0, "end")
-
     if not queue:
         queue_mb.menu.add_command(label="(Queue empty)", state="disabled")
         return
-
     for i, song in enumerate(queue):
         song_menu = tk.Menu(queue_mb.menu, tearoff=False, bg=BUTTON_BG, fg="white")
-
-        song_menu.add_command(
-            label="▶ Play",
-            command=lambda idx=i: play_song(queue_paths[idx], use_invisible=False)
-        )
-
-        song_menu.add_command(
-            label="❌ Remove from Queue",
-            command=lambda idx=i: remove_from_queue(idx)
-        )
-
+        song_menu.add_command(label="▶ Play", command=lambda idx=i: play_song(queue_paths[idx], use_invisible=False))
+        song_menu.add_command(label="❌ Remove from Queue", command=lambda idx=i: remove_from_queue(idx))
         queue_mb.menu.add_cascade(label=song, menu=song_menu)
 
 def remove_from_queue(index):
@@ -275,7 +294,6 @@ def add_to_queue(name, path):
     queue_paths.append(path)
     refresh_queue_dropdown()
 
-# ---------------------------- PLAYLIST DROPDOWN ----------------------#
 def refresh_playlists_dropdown():
     master_playlist_mb.menu.delete(0, "end")
     for playlist_name, folder in playlist_dict.items():
@@ -299,7 +317,7 @@ def add_playlist_folder():
         playlist_dict[os.path.basename(dest)] = dest
         refresh_playlists_dropdown()
 
-# ---------------------------- GUI SETUP -------------------------------#
+# ---------------------------- GUI SETUP ------------------------------- #
 root = tk.Tk()
 root.title("Spotify Clone")
 root.configure(bg=BACKGROUND)
@@ -307,8 +325,16 @@ screen_w = root.winfo_screenwidth()
 screen_h = root.winfo_screenheight()
 root.geometry(f"{int(screen_w*0.7)}x{int(screen_h*0.7)}")
 
-# --- TOP FRAME --- #
-top_frame = tk.Frame(root, bg=BACKGROUND)
+# Tabs
+notebook = ttk.Notebook(root)
+notebook.pack(fill="both", expand=True)
+
+player_tab = tk.Frame(notebook, bg=BACKGROUND)
+notebook.add(player_tab, text="Player")
+
+
+# Top Frame
+top_frame = tk.Frame(player_tab, bg=BACKGROUND)
 top_frame.pack(fill="x", pady=4)
 
 master_playlist_mb = tk.Menubutton(top_frame, text="Playlists", bg=BUTTON_BG, fg="white", relief="raised")
@@ -325,8 +351,8 @@ ensure_music_folder()
 playlist_dict = scan_playlists()
 refresh_playlists_dropdown()
 
-# --- RIGHT FRAME --- #
-right_frame = tk.Frame(root, bg=BACKGROUND)
+# Right Frame
+right_frame = tk.Frame(player_tab, bg=BACKGROUND)
 right_frame.pack(fill="both", expand=True)
 
 album_label = tk.Label(right_frame, bg=BACKGROUND)
@@ -338,7 +364,8 @@ now_playing_label.pack(pady=4)
 time_label = tk.Label(right_frame, text="0:00 / 0:00", fg="white", bg=BACKGROUND, font=("Arial",12))
 time_label.pack(pady=2)
 
-# BOTTOM CONTROLS
+
+# ----------------- BOTTOM CONTROLS ----------------- #
 bottom = tk.Frame(right_frame, bg=PANEL_BG)
 bottom.pack(side="bottom", fill="x", padx=8, pady=8)
 
@@ -366,7 +393,7 @@ volume_slider = tk.Scale(controls, from_=0, to=1, resolution=0.01, orient="horiz
                          command=lambda v: pygame.mixer.music.set_volume(float(v)), length=140, bg=PANEL_BG, fg="white")
 volume_slider.grid(row=0, column=6, padx=8)
 
-# progress bar
+# Progress bar
 progress_var = tk.DoubleVar()
 progress_bar = tk.Scale(bottom, variable=progress_var, from_=0, to=100, orient="horizontal", length=520,
                         showvalue=0, bg="white", troughcolor="#888")
@@ -376,5 +403,9 @@ progress_bar.bind("<B1-Motion>", seek_to)
 progress_bar.bind("<ButtonRelease-1>", stop_seek)
 
 pygame.mixer.music.set_volume(volume_var.get())
+
+
+# ----------------- INITIALIZE ----------------- #
+
 update_progress()
 root.mainloop()
